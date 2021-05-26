@@ -1,6 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import torch
+from . import dtypes
+
 class IODescription(object):
     """ A hashable description for NNFusion model input/output.
 
@@ -46,6 +49,9 @@ class IODescription(object):
 
     def __ne__(self, other):
         return not (self == other)
+    
+    def get_torch_cuda_buffer(self):
+        return torch.empty(self.shape, dtype=dtypes.str2type[self._dtype].torch_type).cuda()
 
 
 class ModelDescription(object):
