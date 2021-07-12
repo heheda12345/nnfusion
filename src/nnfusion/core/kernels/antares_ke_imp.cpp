@@ -3,6 +3,8 @@
 
 #include "antares_ke_imp.hpp"
 #include "nnfusion/util/curl_request.hpp"
+#define ANTARES_FORMAT_CHECK(cond)                                                                 \
+    NNFUSION_CHECK(cond) << "Cannot parse antares response, make sure antare server >= v0.2"
 
 using namespace nnfusion;
 using namespace nnfusion::kernels;
@@ -10,6 +12,38 @@ using namespace nnfusion::kernels;
 DECLARE_string(fantares_codegen_server);
 
 std::unordered_map<std::string, std::pair<std::string, bool>> AntaresKEImp::code_cache;
+
+namespace
+{
+    auto get_between = [](const std::string& str,
+                          const std::string& begin,
+                          const std::string& end,
+                          int start_idx = 0,
+                          const std::string& def_ret = "") -> std::string {
+        if (start_idx < 0)
+            return def_ret;
+        int at = str.find(begin);
+        if (at < 0)
+            return def_ret;
+        at += begin.size();
+        int next = str.find(end, at);
+        if (next < at)
+            return def_ret;
+        return str.substr(at, next - at);
+    };
+
+    auto ssplit = [](const std::string& str, const std::string& sub) -> std::vector<std::string> {
+        std::vector<std::string> ret;
+        int it = 0, next;
+        while (next = str.find(sub, it), next >= 0)
+        {
+            ret.push_back(str.substr(it, next - it));
+            it = next + sub.size();
+        }
+        ret.push_back(str.substr(it));
+        return std::move(ret);
+    };
+}
 
 std::pair<std::string, bool> AntaresKEImp::autogen(const std::string& expr)
 {
@@ -91,10 +125,10 @@ std::pair<int, int> AntaresKEImp::get_tuning_step(const std::string& response)
 
 std::string AntaresKEImp::get_device_name(const std::string& response)
 {
-    /*// BACKEND = c-cuda (Tesla V100-PCIE-16GB)*/
-    /*// BACKEND = c-cuda (default)*/
+    /*// BACKEND: c-cuda (Tesla V100-PCIE-16GB)*/
+    /*// BACKEND: c-cuda (default)*/
     std::string device_name = "default";
-    size_t pos = response.find("\n// BACKEND = ");
+    size_t pos = response.find("\n// BACKEND: ");
     if (pos != std::string::npos)
     {
         size_t pos_st = response.find("(", pos) + 1;
@@ -107,51 +141,109 @@ std::string AntaresKEImp::get_device_name(const std::string& response)
 
 std::vector<nnfusion::Shape> AntaresKEImp::get_output_shapes(const std::string& response)
 {
-    /*///1-128-8-8/float32/input0,3-3-128-1/float32/input1:1-128-8-8/float32/output0*/
+    // // GLOBALS: input0:float32[1, 576, 768], input1:float32[1, 576, 768] -> output0:float32[1, 576, 768]
     std::vector<nnfusion::Shape> output_shapes;
 
-    size_t pos_st = response.find("///");
-    NNFUSION_CHECK(pos_st != std::string::npos);
-    pos_st += 3; // size of "///"
-    size_t pos_ed = response.find("\n", pos_st);
-    NNFUSION_CHECK(pos_ed != std::string::npos && pos_ed > pos_st);
-    std::string shape_string = response.substr(pos_st, pos_ed - pos_st);
-    NNFUSION_CHECK(shape_string.find("output") != std::string::npos);
+    size_t pos_st = response.find("// GLOBALS:");
+    ANTARES_FORMAT_CHECK(pos_st != std::string::npos);
 
-    pos_st = shape_string.find_last_of(":");
-    NNFUSION_CHECK(pos_st != std::string::npos);
-    pos_st += 1;
-    std::string output_shape_string = shape_string.substr(pos_st, shape_string.size() - pos_st);
-    NNFUSION_CHECK(output_shape_string.find(":") == std::string::npos);
-
-    std::vector<std::string> outputs;
-    output_shape_string.push_back(',');
+    auto sig = get_between(response, "// GLOBALS:", "\n");
+    auto outputs = ssplit(sig, "->").at(1);
+    auto splitted_outputs = ssplit(outputs, ", output");
+    for (const auto& output : splitted_outputs)
     {
-        size_t curr, prev = 0;
-        curr = output_shape_string.find(",");
-        while (curr != std::string::npos)
-        {
-            outputs.push_back(output_shape_string.substr(prev, curr - prev));
-            prev = curr + 1;
-            curr = output_shape_string.find(',', prev);
-        }
-    }
-    for (auto output : outputs)
-    {
-        std::string shape_str = output.substr(0, output.find('/'));
         nnfusion::Shape shape;
-
-        shape_str.push_back('-');
-        size_t curr, prev = 0;
-        curr = shape_str.find("-");
-        while (curr != std::string::npos)
+        auto shape_str = get_between(output, "[", "]");
+        for (auto dim_str : ssplit(shape_str, ","))
         {
-            shape.push_back(std::stoi(shape_str.substr(prev, curr - prev)));
-            prev = curr + 1;
-            curr = shape_str.find("-", prev);
+            shape.push_back(std::stoul(dim_str));
         }
         output_shapes.push_back(shape);
     }
-
     return output_shapes;
+}
+
+std::vector<AntaresKernelInfo::Pointer> AntaresKEImp::get_kernel_info(const std::string& response)
+{
+    // example:
+    // LOCAL: template_op_kernel0 -- input0:float32[1, 12, 576, 576] -> mediate0:float32[1, 12, 576]
+    // ...
+    // LOCAL: template_op_kernel1 -- input0:float32[1, 12, 576, 576], mediate0:float32[1, 12, 576] -> mediate1:float32[1, 12, 576]
+    // ...
+    // LOCAL: template_op_kernel2 -- input0:float32[1, 12, 576, 576], mediate0:float32[1, 12, 576], mediate1:float32[1, 12, 576] -> output0:float32[1, 12, 576, 576]
+
+    std::vector<AntaresKernelInfo::Pointer> res;
+
+    std::string start = "// LOCAL: ";
+    std::string end = "\n";
+    std::vector<std::string> kernel_info_cmt;
+
+    int s_pos = response.find(start, 0);
+
+    while (s_pos > 0)
+    {
+        int e_pos = response.find(end, s_pos);
+        NNFUSION_CHECK(e_pos >= 0);
+        std::string info = response.substr(s_pos + 10, e_pos - s_pos - 10);
+        kernel_info_cmt.push_back(info);
+        s_pos = response.find(start, e_pos);
+    }
+
+    for (size_t i = 0; i < kernel_info_cmt.size(); i++)
+    {
+        std::string info = kernel_info_cmt[i];
+        AntaresKernelInfo::Pointer kernel_info = std::make_shared<AntaresKernelInfo>();
+
+        int kernel_name_s_pos = 0;
+        int kernel_name_e_pos = info.find(" -- ", kernel_name_s_pos);
+        NNFUSION_CHECK(kernel_name_e_pos >= 0);
+        kernel_info->kernel_name =
+            info.substr(kernel_name_s_pos, kernel_name_e_pos - kernel_name_s_pos);
+        int input_name_e_pos = info.find(" -> ", kernel_name_e_pos);
+        NNFUSION_CHECK(input_name_e_pos >= 0);
+        std::string input_info =
+            info.substr(kernel_name_e_pos + 4, input_name_e_pos - kernel_name_e_pos - 4);
+        std::string output_info = info.substr(input_name_e_pos + 4);
+
+        int single_input_s_pos = 0;
+        int single_input_e_pos = input_info.find("]", single_input_s_pos);
+        while (single_input_e_pos > 0)
+        {
+            std::string input =
+                input_info.substr(single_input_s_pos, single_input_e_pos - single_input_s_pos + 1);
+            int name_e_pos = input.find(":");
+            NNFUSION_CHECK(name_e_pos >= 0);
+            int shape_s_pos = input.find("[");
+            NNFUSION_CHECK(shape_s_pos >= 0);
+            kernel_info->input_names.push_back(input.substr(0, name_e_pos));
+            kernel_info->input_dtypes.push_back(
+                input.substr(name_e_pos + 1, shape_s_pos - name_e_pos - 1));
+            kernel_info->input_shapes.push_back(input.substr(shape_s_pos));
+
+            single_input_s_pos = single_input_e_pos + 3;
+            single_input_e_pos = input_info.find("]", single_input_s_pos);
+        }
+
+        int single_output_s_pos = 0;
+        int single_output_e_pos = output_info.find("]", single_output_s_pos);
+        while (single_output_e_pos > 0)
+        {
+            std::string output = output_info.substr(single_output_s_pos,
+                                                    single_output_e_pos - single_output_s_pos + 1);
+            int name_e_pos = output.find(":");
+            NNFUSION_CHECK(name_e_pos >= 0);
+            int shape_s_pos = output.find("[");
+            NNFUSION_CHECK(shape_s_pos >= 0);
+            kernel_info->output_names.push_back(output.substr(0, name_e_pos));
+            kernel_info->output_dtypes.push_back(
+                output.substr(name_e_pos + 1, shape_s_pos - name_e_pos - 1));
+            kernel_info->output_shapes.push_back(output.substr(shape_s_pos));
+
+            single_output_s_pos = single_output_e_pos + 3;
+            single_output_e_pos = output_info.find("]", single_output_s_pos);
+        }
+        res.push_back(kernel_info);
+    }
+
+    return res;
 }
