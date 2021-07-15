@@ -51,7 +51,7 @@ class IODescription(object):
         return not (self == other)
     
     def get_torch_cuda_buffer(self):
-        return torch.empty(self.shape, dtype=dtypes.str2type[self._dtype].torch_type).cuda()
+        return torch.empty(self.shape, dtype=dtypes.str2type[self._dtype].torch_type, device='cuda')
 
 
 class ModelDescription(object):
