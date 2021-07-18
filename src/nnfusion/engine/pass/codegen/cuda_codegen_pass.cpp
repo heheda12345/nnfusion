@@ -1153,7 +1153,7 @@ void CudaCodegenPass::create_main_file(std::shared_ptr<InterpreterContext> ctx,
         lu_main.block_begin();
 
         lu_main << "cudaEventRecord(start_i, 0);\n";
-        lu_main << get_h2dcopy(tu)->get_code();
+        // lu_main << get_h2dcopy(tu)->get_code();
         // kernel launch
         lu_main << "kernel_entry(" << args << ");\n";
 
