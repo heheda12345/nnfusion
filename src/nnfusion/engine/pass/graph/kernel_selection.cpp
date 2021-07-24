@@ -322,12 +322,30 @@ pair<NNFusion_DeviceType, kernels::KernelEmitter::Pointer>
 
         // emit External kernels
         {
+            std::string best_key;
+            float best_profile = 1048576;
+            std::string device = FLAGS_fproduct_name;
             for (auto kernel_entry : fetched)
             {
                 if (kernel_entry->source == "External")
                 {
                     NNFUSION_CHECK(kernel_entry->tags.find("BlockCudaEmitter") !=
                                    kernel_entry->tags.end());
+                    if (best_key == "")
+                    {
+                        best_key = kernel_entry->key;
+                    }
+                    if (kernel_entry->profile.find(device) != kernel_entry->profile.end() && kernel_entry->profile[device] < best_profile)
+                    {
+                        best_key = kernel_entry->key;
+                        best_profile = kernel_entry->profile[device];
+                    }
+                }
+            }
+            for (auto kernel_entry : fetched)
+            {
+                if (kernel_entry->source == "External" && kernel_entry->key == best_key)
+                {
                     auto kernel =
                         std::make_shared<kernels::cuda::CacheBlockCudaEmitter>(ctx, kernel_entry);
                     if (kernel->get_or_emit_source())
