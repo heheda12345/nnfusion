@@ -339,20 +339,20 @@ bool CudaCodegenPass::collect_funcs(std::shared_ptr<InterpreterContext> ctx,
 
             std::string call_str = fu->get_specialized_funciton_call(func_name);
             // todo: this hack is to eliminate d2d copy caused by extern result memory
-            if (FLAGS_fextern_result_memory && gnode)
-            {
-                for (size_t i = 0; i < gnode->get_out_edges().size(); i++)
-                {
-                    if (gnode->get_out_edges()[i]->get_dst()->get_op_ptr()->is_output())
-                    {
-                        std::shared_ptr<GNode> output = gnode->get_out_edges()[i]->get_dst();
-                        std::string in_name = output->get_input_tensor(0).get_name();
-                        std::string out_name = output->get_output_tensor(0).get_name();
-                        int pos = call_str.find(", " + in_name);
-                        call_str.replace(pos, in_name.size() + 2, ", " + out_name);
-                    }
-                }
-            }
+            // if (FLAGS_fextern_result_memory && gnode)
+            // {
+            //     for (size_t i = 0; i < gnode->get_out_edges().size(); i++)
+            //     {
+            //         if (gnode->get_out_edges()[i]->get_dst()->get_op_ptr()->is_output())
+            //         {
+            //             std::shared_ptr<GNode> output = gnode->get_out_edges()[i]->get_dst();
+            //             std::string in_name = output->get_input_tensor(0).get_name();
+            //             std::string out_name = output->get_output_tensor(0).get_name();
+            //             int pos = call_str.find(", " + in_name);
+            //             call_str.replace(pos, in_name.size() + 2, ", " + out_name);
+            //         }
+            //     }
+            // }
             int pos_right = call_str.find(">>>(");
             if (pos_right >= 0)
             {
@@ -802,10 +802,10 @@ nnfusion::LanguageUnit_p CudaCodegenPass::func_call_codegen(nnfusion::ir::Instru
             lu << "// eliminated: " << func_call;
         }
         // todo: this hack is to eliminate d2d copy caused by extern result memory
-        else if (FLAGS_fextern_result_memory && gnode && gnode->get_op_ptr()->is_output())
-        {
-            lu << "// eliminated: " << func_call;
-        }
+        // else if (FLAGS_fextern_result_memory && gnode && gnode->get_op_ptr()->is_output())
+        // {
+        //     lu << "// eliminated: " << func_call;
+        // }
 
         else
         {
@@ -1264,7 +1264,7 @@ void CudaCodegenPass::create_main_file(std::shared_ptr<InterpreterContext> ctx,
             warm_step = 0;
             test_step = 1;
         }
-        lu_main << "\n//warm up for 5 iters:\n";
+        lu_main << "\n//warm up for 100 iters:\n";
         lu_main << "for(int i_=0; i_< " << warm_step << "; i_++)\n";
         lu_main.block_begin();
         std::string args;

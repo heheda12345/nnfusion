@@ -234,15 +234,6 @@ __device__ __forceinline__ float  load(const float*  __restrict__ in, int i=0, b
     }
     return v;
 }
-__device__ __forceinline__ half  load(const half*  __restrict__ in, int i=0, bool b=true)
-{
-    half v = 0.0f;
-    if (b)
-    {
-        v = __ldg(in + i);
-    }
-    return v;
-}
 __device__ __forceinline__ int32_t  load(const int32_t*  __restrict__ in, int i=0, bool b=true)
 {
     int32_t v = 0;
@@ -1591,14 +1582,6 @@ __device__ inline float Rsqrt(const float& x) {
   return rsqrtf(x);
 }
 
-template <>
-__device__ inline half Rsqrt(const half& x) {
-#if __CUDA_ARCH__ >= 530 || !defined(__CUDA_ARCH__)
-  return hrsqrt(x);
-#else
-  return half(rsqrtf(float(x)));
-#endif
-}
 )");
 
 LU_DEFINE(declaration::math_Gelu, R"(
@@ -1610,9 +1593,6 @@ __device__ __inline__ float _Normcdf(float a) { return normcdff(a); }
 
 template <>
 __device__ __inline__ double _Normcdf(double a) { return normcdf(a); }
-
-template <>
-__device__ __inline__ half _Normcdf(half a) { return half(normcdff((float)a)); }
 
 template <typename T>
 __device__ __inline__ T _Gelu(T a) {
